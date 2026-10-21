@@ -53,12 +53,35 @@ transport, schema map, or dialer while operations are running. Individual GET
 contexts do not change those fields. Malformed nonempty `CACerts` now fails
 before network access in both constructors, including when `Insecure` is true.
 
-Development uses `Containerfile.dev`, pinned to Go 1.27.3, with the module's
-Go 1.26.0 floor and dependency graph retained. Run focused
-`go test -race ./clientbase` and `go vet ./clientbase` inside the project
-development container, with explicit runtime environment
-`GOPROXY=https://proxy.golang.org` and `GOSUMDB=sum.golang.org`.
-The inherited Makefile's lint v1 target is not the fork acceptance gate; a
-separate tooling change must provide the v2 gate before delivery. These APIs do
-not establish provider SDK cancellation, whole-module ABI, performance, or
-production acceptance. No fork release is declared here.
+Development uses the digest-pinned Go 1.27.3 `Containerfile.dev`; the module's
+Go 1.26.0 floor, dependency graph and checksums remain unchanged. Install only
+rootless Podman, Git and Make on the host. After the own-fork CI control change
+is present, run `SCAN_BASE=<reviewed-base-sha> make ci` for all checks, or
+`make build`, `make test`,
+`make vet`, `make format`, `make lint`, `make vuln` and `make tidy` for individual
+checks. `make validate` runs vet, format and lint. Format is check-only; tidy
+runs twice in a private archive and fails on changes to `go.mod` or `go.sum`.
+Each invocation builds the checked-out development image, mounts source read-only,
+and removes only its own ephemeral container, image and cache. Outputs, including
+the example binary, are temporary. No host Go tools or persistent volumes are used.
+The optional `compose.yaml` dev shell uses the same Containerfile without a socket.
+
+The dispatcher sets `GOPROXY=https://proxy.golang.org` and
+`GOSUMDB=sum.golang.org` explicitly. Exact-version tools are installed outside
+the product module and their Go build information is checked; no tool dependencies
+are added to the retained module graph. golangci-lint v2 runs all linters and
+checks gofumpt/goimports formatting across the module, including tests and
+generated files, without diff filters or exclusion presets. Existing findings
+remain blocking and visible; this tooling change does not assert a clean baseline
+or reformat untouched code. Tests bind the 36 required context cases (10 top-level)
+to actual race-enabled JSON events; the full module is built and vetted.
+
+Only same-repository pull requests to `fork/release-v0.9` run the own-fork
+Blacksmith job. Inherited Rancher CI/release/Vault jobs are guarded for
+`rancher/norman`. Before enabling Actions, the fork owner must publish the guarded
+CI control branch and switch the own default to it; keep old main and backup refs.
+The own job receives read-only contents permission and no upstream credentials.
+
+These APIs and checks do not establish provider SDK cancellation, whole-module
+ABI, performance, live integration or production acceptance. No fork release
+is declared here.
