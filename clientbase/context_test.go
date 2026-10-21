@@ -9,14 +9,14 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/rancher/norman/types"
-	"net/http"
-	"net/http/httptest"
-	"sync/atomic"
-	"testing"
 )
 
 func TestLegacyMalformedCA(t *testing.T) {
@@ -44,13 +44,25 @@ func TestLegacyMalformedCA(t *testing.T) {
 	}
 }
 
-func contextSchema(w http.ResponseWriter, r *http.Request) {
-	schemaURL := "http://" + r.Host
+func contextSchema(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	t.Helper()
+
+	base := "http://" + r.Host
+	if r.TLS != nil {
+		base = "https://" + r.Host
+	}
+	schemaURL := base
 	if r.URL.Path != "/" {
 		schemaURL += r.URL.Path
 	}
 	w.Header().Set("X-API-Schemas", schemaURL)
-	fmt.Fprintf(w, `{"data":[{"id":"setting","resourceMethods":["GET","PUT","DELETE"],"collectionMethods":["POST"],"links":{"collection":"http://%s/settings"}}]}`, r.Host)
+	response := map[string]any{"data": []any{map[string]any{
+		"id": "setting", "resourceMethods": []string{"GET", "PUT", "DELETE"},
+		"collectionMethods": []string{"POST"}, "links": map[string]string{"collection": base + "/settings"},
+	}}}
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		t.Errorf("schema response: %v", err)
+	}
 }
 
 func TestContextMalformedCA(t *testing.T) {
@@ -75,7 +87,7 @@ func TestContextPreCanceled(t *testing.T) {
 		} else {
 			mutations.Add(1)
 		}
-		contextSchema(w, r)
+		contextSchema(t, w, r)
 	}))
 	defer server.Close()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -88,7 +100,8 @@ func TestContextPreCanceled(t *testing.T) {
 		"setting": {ResourceMethods: []string{"GET", "PUT", "DELETE"}, CollectionMethods: []string{"POST"}, Links: map[string]string{COLLECTION: server.URL}},
 	}}
 	var out map[string]interface{}
-	existing := &types.Resource{Links: map[string]string{SELF: server.URL}}
+	existing := new(types.Resource)
+	existing.Links = map[string]string{SELF: server.URL}
 	for _, err := range []error{ops.DoGetContext(ctx, server.URL, nil, &out), ops.DoByIDContext(ctx, "setting", "name", &out), ops.DoCreateContext(ctx, "setting", nil, &out), ops.DoUpdateContext(ctx, "setting", existing, nil, &out), ops.DoResourceDeleteContext(ctx, "setting", existing)} {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("operation: %v", err)
@@ -134,7 +147,7 @@ func TestContextHTTPPhases(t *testing.T) {
 							w.Header().Set("X-API-Schemas", "http://"+r.Host+"/blocked")
 							fmt.Fprint(w, `{}`)
 						} else {
-							contextSchema(w, r)
+							contextSchema(t, w, r)
 						}
 						return
 					}
@@ -185,7 +198,8 @@ func TestContextHTTPPhases(t *testing.T) {
 				done := make(chan error, 1)
 				go func() {
 					var out map[string]interface{}
-					existing := &types.Resource{Links: map[string]string{SELF: server.URL + "/settings/name"}}
+					existing := new(types.Resource)
+					existing.Links = map[string]string{SELF: server.URL + "/settings/name"}
 					switch operation {
 					case "constructor-first":
 						opts.URL = server.URL + "/blocked"
@@ -279,7 +293,7 @@ func TestContextReuseAndIsolation(t *testing.T) {
 			return
 		}
 		if r.URL.Path == "/" {
-			contextSchema(w, r)
+			contextSchema(t, w, r)
 			return
 		}
 		fmt.Fprint(w, `{"value":"ready"}`)
@@ -337,7 +351,7 @@ func TestContextErrorCausesAndLegacyStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/":
-			contextSchema(w, r)
+			contextSchema(t, w, r)
 		case "/truncated", "/status-truncated":
 			w.Header().Set("Content-Length", "100")
 			if r.URL.Path == "/status-truncated" {
@@ -426,7 +440,7 @@ func TestContextTLSAuthAndSchemaControls(t *testing.T) {
 			w.Header().Set("X-API-Schemas", "https://"+r.Host+"/schemas")
 			fmt.Fprint(w, `{}`)
 		case "/schemas":
-			fmt.Fprintf(w, `{"data":[{"id":"setting","resourceMethods":["GET","PUT","DELETE"],"collectionMethods":["POST"],"links":{"collection":"https://%s/settings"}}]}`, r.Host)
+			contextSchema(t, w, r)
 		case "/redirect":
 			http.Redirect(w, r, "/settings/name", 302)
 		case "/settings/name":
@@ -440,7 +454,9 @@ func TestContextTLSAuthAndSchemaControls(t *testing.T) {
 			fmt.Fprint(w, `{"value":"ok"}`)
 		case "/settings":
 			w.WriteHeader(http.StatusCreated)
-			fmt.Fprint(w, `{"value":"created"}`)
+			if _, err := fmt.Fprint(w, `{"value":"created"}`); err != nil {
+				t.Errorf("create response: %v", err)
+			}
 		case "/filter":
 			if r.URL.Query().Get("name") != "a b" {
 				t.Error("filter missing")
@@ -479,31 +495,9 @@ func TestContextTLSAuthAndSchemaControls(t *testing.T) {
 					t.Fatal(err)
 				}
 				updates := map[string]string{"value": "new"}
-				existing := &types.Resource{Links: map[string]string{SELF: server.URL + "/settings/name?source=kept"}}
-				if contextual {
-					err = client.Ops.DoCreateContext(context.Background(), "setting", updates, &out)
-				} else {
-					err = client.Ops.DoCreate("setting", updates, &out)
-				}
-				if err != nil || out["value"] != "created" {
-					t.Fatalf("Create=%v %v", out, err)
-				}
-				if contextual {
-					err = client.Ops.DoUpdateContext(context.Background(), "setting", existing, updates, &out)
-				} else {
-					err = client.Ops.DoUpdate("setting", existing, updates, &out)
-				}
-				if err != nil || out["value"] != "ok" {
-					t.Fatalf("Update=%v %v", out, err)
-				}
-				if contextual {
-					err = client.Ops.DoResourceDeleteContext(context.Background(), "setting", existing)
-				} else {
-					err = client.Ops.DoResourceDelete("setting", existing)
-				}
-				if err != nil {
-					t.Fatal(err)
-				}
+				existing := new(types.Resource)
+				existing.Links = map[string]string{SELF: server.URL + "/settings/name?source=kept"}
+				checkContextMutationWire(t, client.Ops, contextual, existing, updates)
 				before := gets.Load()
 				for _, schema := range []string{"unknown", "not-readable", "no-link"} {
 					client.Types["not-readable"] = types.Schema{}
@@ -527,6 +521,44 @@ func TestContextTLSAuthAndSchemaControls(t *testing.T) {
 		t.Fatalf("mutations=%d; want 12 legacy/contextual wire controls", mutations.Load())
 	}
 	t.Logf("GET=%d mutations=%d", gets.Load(), mutations.Load())
+}
+
+func checkContextMutationWire(
+	t *testing.T, ops *APIOperations, contextual bool, existing *types.Resource, updates map[string]string,
+) {
+	t.Helper()
+
+	var out map[string]string
+	var err error
+	if contextual {
+		err = ops.DoCreateContext(context.Background(), "setting", updates, &out)
+	} else {
+		err = ops.DoCreate("setting", updates, &out)
+	}
+
+	if err != nil || out["value"] != "created" {
+		t.Fatalf("Create=%v %v", out, err)
+	}
+
+	if contextual {
+		err = ops.DoUpdateContext(context.Background(), "setting", existing, updates, &out)
+	} else {
+		err = ops.DoUpdate("setting", existing, updates, &out)
+	}
+
+	if err != nil || out["value"] != "ok" {
+		t.Fatalf("Update=%v %v", out, err)
+	}
+
+	if contextual {
+		err = ops.DoResourceDeleteContext(context.Background(), "setting", existing)
+	} else {
+		err = ops.DoResourceDelete("setting", existing)
+	}
+
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 type cancelOnDecode struct{ cancel context.CancelFunc }

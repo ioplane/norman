@@ -30,6 +30,122 @@ func (a *APIOperations) DoDelete(url string) error {
 	return a.doDelete(context.Background(), url, false)
 }
 
+func (a *APIOperations) DoGet(url string, opts *types.ListOpts, respObject interface{}) error {
+	return a.doGet(context.Background(), url, opts, respObject, false)
+}
+
+// DoGetContext reads a resource using only this request's context.
+func (a *APIOperations) DoGetContext(ctx context.Context, url string, opts *types.ListOpts, out interface{}) error {
+	return a.doGet(ctx, url, opts, out, true)
+}
+
+func (a *APIOperations) DoList(schemaType string, opts *types.ListOpts, respObject interface{}) error {
+	schema, ok := a.Types[schemaType]
+	if !ok {
+		return errors.New("Unknown schema type [" + schemaType + "]")
+	}
+
+	if !contains(schema.CollectionMethods, "GET") {
+		return errors.New("Resource type [" + schemaType + "] is not listable")
+	}
+
+	collectionURL, ok := schema.Links["collection"]
+	if !ok {
+		return errors.New("Resource type [" + schemaType + "] does not have a collection URL")
+	}
+
+	return a.DoGet(collectionURL, opts, respObject)
+}
+
+func (a *APIOperations) DoNext(nextURL string, respObject interface{}) error {
+	return a.DoGet(nextURL, nil, respObject)
+}
+
+func (a *APIOperations) DoModify(method string, url string, createObj interface{}, respObject interface{}) error {
+	return a.doModify(context.Background(), method, url, createObj, respObject, false)
+}
+
+func (a *APIOperations) DoCreate(schemaType string, createObj interface{}, respObject interface{}) error {
+	return a.doCreate(context.Background(), schemaType, createObj, respObject, false)
+}
+
+// DoCreateContext creates a resource without retrying a canceled write.
+func (a *APIOperations) DoCreateContext(ctx context.Context, schemaType string, createObj, respObject any) error {
+	return a.doCreate(ctx, schemaType, createObj, respObject, true)
+}
+
+func (a *APIOperations) DoReplace(schemaType string, existing *types.Resource, updates interface{}, respObject interface{}) error {
+	return a.doUpdate(context.Background(), schemaType, true, existing, updates, respObject, false)
+}
+
+func (a *APIOperations) DoUpdate(schemaType string, existing *types.Resource, updates interface{}, respObject interface{}) error {
+	return a.doUpdate(context.Background(), schemaType, false, existing, updates, respObject, false)
+}
+
+// DoUpdateContext updates a resource using only this operation's context.
+func (a *APIOperations) DoUpdateContext(
+	ctx context.Context, schemaType string, existing *types.Resource, updates, respObject any,
+) error {
+	return a.doUpdate(ctx, schemaType, false, existing, updates, respObject, true)
+}
+
+func (a *APIOperations) DoByID(schemaType string, id string, respObject interface{}) error {
+	return a.doByID(context.Background(), schemaType, id, respObject, false)
+}
+
+// DoByIDContext preserves schema lookup rules and cancels the resulting GET with ctx.
+func (a *APIOperations) DoByIDContext(ctx context.Context, schemaType, id string, out interface{}) error {
+	return a.doByID(ctx, schemaType, id, out, true)
+}
+
+func (a *APIOperations) DoResourceDelete(schemaType string, existing *types.Resource) error {
+	return a.doResourceDelete(context.Background(), schemaType, existing, false)
+}
+
+// DoResourceDeleteContext deletes a resource without retrying an uncertain outcome.
+func (a *APIOperations) DoResourceDeleteContext(
+	ctx context.Context, schemaType string, existing *types.Resource,
+) error {
+	if existing == nil {
+		return fmt.Errorf("delete %s: %w", schemaType, nilResourceError{})
+	}
+	return a.doResourceDelete(ctx, schemaType, existing, true)
+}
+
+type nilResourceError struct{}
+
+func (nilResourceError) Error() string { return "existing object is nil" }
+
+func (a *APIOperations) DoAction(schemaType string, action string,
+	existing *types.Resource, inputObject, respObject interface{}) error {
+
+	if existing == nil {
+		return errors.New("Existing object is nil")
+	}
+
+	actionURL, ok := existing.Actions[action]
+	if !ok {
+		return fmt.Errorf("action [%v] not available on [%v]", action, existing)
+	}
+
+	return a.doAction(schemaType, action, actionURL, inputObject, respObject)
+}
+
+func (a *APIOperations) DoCollectionAction(schemaType string, action string,
+	existing *types.Collection, inputObject, respObject interface{}) error {
+
+	if existing == nil {
+		return errors.New("Existing object is nil")
+	}
+
+	actionURL, ok := existing.Actions[action]
+	if !ok {
+		return fmt.Errorf("action [%v] not available on [%v]", action, existing)
+	}
+
+	return a.doAction(schemaType, action, actionURL, inputObject, respObject)
+}
+
 func (a *APIOperations) doDelete(ctx context.Context, url string, contextual bool) error {
 	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 	if err != nil {
@@ -58,15 +174,6 @@ func (a *APIOperations) doDelete(ctx context.Context, url string, contextual boo
 	}
 
 	return nil
-}
-
-func (a *APIOperations) DoGet(url string, opts *types.ListOpts, respObject interface{}) error {
-	return a.doGet(context.Background(), url, opts, respObject, false)
-}
-
-// DoGetContext reads a resource using only this request's context.
-func (a *APIOperations) DoGetContext(ctx context.Context, url string, opts *types.ListOpts, out interface{}) error {
-	return a.doGet(ctx, url, opts, out, true)
 }
 
 func (a *APIOperations) doGet(ctx context.Context, url string, opts *types.ListOpts, respObject interface{}, contextual bool) error {
@@ -121,33 +228,9 @@ func (a *APIOperations) doGet(ctx context.Context, url string, opts *types.ListO
 	return ctx.Err()
 }
 
-func (a *APIOperations) DoList(schemaType string, opts *types.ListOpts, respObject interface{}) error {
-	schema, ok := a.Types[schemaType]
-	if !ok {
-		return errors.New("Unknown schema type [" + schemaType + "]")
-	}
-
-	if !contains(schema.CollectionMethods, "GET") {
-		return errors.New("Resource type [" + schemaType + "] is not listable")
-	}
-
-	collectionURL, ok := schema.Links["collection"]
-	if !ok {
-		return errors.New("Resource type [" + schemaType + "] does not have a collection URL")
-	}
-
-	return a.DoGet(collectionURL, opts, respObject)
-}
-
-func (a *APIOperations) DoNext(nextURL string, respObject interface{}) error {
-	return a.DoGet(nextURL, nil, respObject)
-}
-
-func (a *APIOperations) DoModify(method string, url string, createObj interface{}, respObject interface{}) error {
-	return a.doModify(context.Background(), method, url, createObj, respObject, false)
-}
-
-func (a *APIOperations) doModify(ctx context.Context, method string, url string, createObj interface{}, respObject interface{}, contextual bool) error {
+func (a *APIOperations) doModify(
+	ctx context.Context, method, url string, createObj, respObject any, contextual bool,
+) error {
 	if createObj == nil {
 		createObj = map[string]string{}
 	}
@@ -197,19 +280,12 @@ func (a *APIOperations) doModify(ctx context.Context, method string, url string,
 		return contextError(ctx, json.Unmarshal(byteContent, respObject))
 	}
 
-	return ctx.Err()
+	return contextError(ctx, nil)
 }
 
-func (a *APIOperations) DoCreate(schemaType string, createObj interface{}, respObject interface{}) error {
-	return a.doCreate(context.Background(), schemaType, createObj, respObject, false)
-}
-
-// DoCreateContext creates a resource without retrying a canceled write.
-func (a *APIOperations) DoCreateContext(ctx context.Context, schemaType string, createObj, respObject any) error {
-	return a.doCreate(ctx, schemaType, createObj, respObject, true)
-}
-
-func (a *APIOperations) doCreate(ctx context.Context, schemaType string, createObj interface{}, respObject interface{}, contextual bool) error {
+func (a *APIOperations) doCreate(
+	ctx context.Context, schemaType string, createObj, respObject any, contextual bool,
+) error {
 	if createObj == nil {
 		createObj = map[string]string{}
 	}
@@ -237,20 +313,10 @@ func (a *APIOperations) doCreate(ctx context.Context, schemaType string, createO
 	return a.doModify(ctx, "POST", collectionURL, createObj, respObject, contextual)
 }
 
-func (a *APIOperations) DoReplace(schemaType string, existing *types.Resource, updates interface{}, respObject interface{}) error {
-	return a.doUpdate(context.Background(), schemaType, true, existing, updates, respObject, false)
-}
-
-func (a *APIOperations) DoUpdate(schemaType string, existing *types.Resource, updates interface{}, respObject interface{}) error {
-	return a.doUpdate(context.Background(), schemaType, false, existing, updates, respObject, false)
-}
-
-// DoUpdateContext updates a resource using only this operation's context.
-func (a *APIOperations) DoUpdateContext(ctx context.Context, schemaType string, existing *types.Resource, updates, respObject any) error {
-	return a.doUpdate(ctx, schemaType, false, existing, updates, respObject, true)
-}
-
-func (a *APIOperations) doUpdate(ctx context.Context, schemaType string, replace bool, existing *types.Resource, updates interface{}, respObject interface{}, contextual bool) error {
+func (a *APIOperations) doUpdate(
+	ctx context.Context, schemaType string, replace bool, existing *types.Resource,
+	updates, respObject any, contextual bool,
+) error {
 	if existing == nil {
 		return errors.New("Existing object is nil")
 	}
@@ -291,15 +357,6 @@ func (a *APIOperations) doUpdate(ctx context.Context, schemaType string, replace
 	return a.doModify(ctx, "PUT", selfURL, updates, respObject, contextual)
 }
 
-func (a *APIOperations) DoByID(schemaType string, id string, respObject interface{}) error {
-	return a.doByID(context.Background(), schemaType, id, respObject, false)
-}
-
-// DoByIDContext preserves schema lookup rules and cancels the resulting GET with ctx.
-func (a *APIOperations) DoByIDContext(ctx context.Context, schemaType, id string, out interface{}) error {
-	return a.doByID(ctx, schemaType, id, out, true)
-}
-
 func (a *APIOperations) doByID(ctx context.Context, schemaType, id string, respObject interface{}, contextual bool) error {
 	schema, ok := a.Types[schemaType]
 	if !ok {
@@ -318,19 +375,9 @@ func (a *APIOperations) doByID(ctx context.Context, schemaType, id string, respO
 	return a.doGet(ctx, collectionURL+"/"+id, nil, respObject, contextual)
 }
 
-func (a *APIOperations) DoResourceDelete(schemaType string, existing *types.Resource) error {
-	return a.doResourceDelete(context.Background(), schemaType, existing, false)
-}
-
-// DoResourceDeleteContext deletes a resource without retrying an uncertain outcome.
-func (a *APIOperations) DoResourceDeleteContext(ctx context.Context, schemaType string, existing *types.Resource) error {
-	if existing == nil {
-		return fmt.Errorf("delete %s: existing object is nil", schemaType)
-	}
-	return a.doResourceDelete(ctx, schemaType, existing, true)
-}
-
-func (a *APIOperations) doResourceDelete(ctx context.Context, schemaType string, existing *types.Resource, contextual bool) error {
+func (a *APIOperations) doResourceDelete(
+	ctx context.Context, schemaType string, existing *types.Resource, contextual bool,
+) error {
 	schema, ok := a.Types[schemaType]
 	if !ok {
 		return errors.New("Unknown schema type [" + schemaType + "]")
@@ -346,36 +393,6 @@ func (a *APIOperations) doResourceDelete(ctx context.Context, schemaType string,
 	}
 
 	return a.doDelete(ctx, selfURL, contextual)
-}
-
-func (a *APIOperations) DoAction(schemaType string, action string,
-	existing *types.Resource, inputObject, respObject interface{}) error {
-
-	if existing == nil {
-		return errors.New("Existing object is nil")
-	}
-
-	actionURL, ok := existing.Actions[action]
-	if !ok {
-		return fmt.Errorf("action [%v] not available on [%v]", action, existing)
-	}
-
-	return a.doAction(schemaType, action, actionURL, inputObject, respObject)
-}
-
-func (a *APIOperations) DoCollectionAction(schemaType string, action string,
-	existing *types.Collection, inputObject, respObject interface{}) error {
-
-	if existing == nil {
-		return errors.New("Existing object is nil")
-	}
-
-	actionURL, ok := existing.Actions[action]
-	if !ok {
-		return fmt.Errorf("action [%v] not available on [%v]", action, existing)
-	}
-
-	return a.doAction(schemaType, action, actionURL, inputObject, respObject)
 }
 
 func (a *APIOperations) doAction(
