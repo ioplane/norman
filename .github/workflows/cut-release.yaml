@@ -12,6 +12,7 @@ permissions: {}
 
 jobs:
   validate:
+    if: github.repository == 'rancher/norman'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -89,6 +90,7 @@ jobs:
           fi
 
   tag:
+    if: github.repository == 'rancher/norman'
     needs: validate
     runs-on: ubuntu-latest
     permissions:

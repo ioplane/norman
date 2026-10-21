@@ -9,6 +9,7 @@ on:
 
 jobs:
   ci:
+    if: github.repository == 'rancher/norman'
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
