@@ -98,7 +98,7 @@ func check() error {
 		if err != nil { return err }
 		var required struct { Package string `json:"package"`; Required []string `json:"required"`; Total int `json:"total"`; Top int `json:"top_level"` }
 		if err := json.Unmarshal(b, &required); err != nil { return err }
-		if required.Package != "github.com/rancher/norman/clientbase" || required.Total != 36 || required.Top != 10 || len(required.Required) != 36 { return fmt.Errorf("unexpected required test manifest") }
+		if required.Package != "github.com/rancher/norman/clientbase" || required.Total != 45 || required.Top != 10 || len(required.Required) != 45 { return fmt.Errorf("unexpected required test manifest") }
 		runs, passes := map[string]int{}, map[string]int{}
 		top, packages := 0, 0
 		for {
@@ -110,13 +110,13 @@ func check() error {
 			if event.Action == "run" { runs[event.Test]++; if !strings.Contains(event.Test, "/") { top++ } }
 			if event.Action == "pass" { passes[event.Test]++ }
 		}
-		if len(runs) != 36 || len(passes) != 36 || top != 10 || packages != 1 { return fmt.Errorf("test input mismatch: runs=%d passes=%d top=%d packages=%d", len(runs), len(passes), top, packages) }
+		if len(runs) != 45 || len(passes) != 45 || top != 10 || packages != 1 { return fmt.Errorf("test input mismatch: runs=%d passes=%d top=%d packages=%d", len(runs), len(passes), top, packages) }
 		seen := map[string]bool{}
 		for _, name := range required.Required {
 			if seen[name] || runs[name] != 1 || passes[name] != 1 { return fmt.Errorf("missing/duplicate/unpassed required test %s", name) }
 			seen[name] = true
 		}
-		fmt.Println("critical tests: 36 run / 36 pass / 0 fail / 0 skip; 10 top-level")
+		fmt.Println("critical tests: 45 run / 45 pass / 0 fail / 0 skip; 10 top-level")
 		return nil
 	default:
 		return fmt.Errorf("unknown evidence mode")
