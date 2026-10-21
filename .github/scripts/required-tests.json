@@ -7,6 +7,9 @@
     "TestContextDecodeBoundary",
     "TestContextErrorCausesAndLegacyStatus",
     "TestContextHTTPPhases",
+    "TestContextHTTPPhases/action/body",
+    "TestContextHTTPPhases/action/error-body",
+    "TestContextHTTPPhases/action/headers",
     "TestContextHTTPPhases/byid/body",
     "TestContextHTTPPhases/byid/error-body",
     "TestContextHTTPPhases/byid/headers",
@@ -47,6 +50,6 @@
     "TestLegacyMalformedCA/insecure",
     "TestLegacyMalformedCA/verified"
   ],
-  "total": 45,
+  "total": 48,
   "top_level": 10
 }
