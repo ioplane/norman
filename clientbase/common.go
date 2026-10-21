@@ -2,6 +2,7 @@ package clientbase
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -93,6 +94,11 @@ func IsNotFound(err error) bool {
 }
 
 func NewAPIError(resp *http.Response, url string) *APIError {
+	apiError, _ := newAPIError(resp, url)
+	return apiError
+}
+
+func newAPIError(resp *http.Response, url string) (*APIError, error) {
 	contents, err := io.ReadAll(resp.Body)
 	var body string
 	if err != nil {
@@ -128,7 +134,29 @@ func NewAPIError(resp *http.Response, url string) *APIError {
 		StatusCode: resp.StatusCode,
 		Status:     resp.Status,
 		Body:       body,
+	}, err
+}
+
+// contextError retains the original cause when cancellation is observed at a boundary.
+func contextError(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		if err != nil {
+			return fmt.Errorf("%w: %w", err, ctx.Err())
+		}
+		return ctx.Err()
 	}
+	return err
+}
+
+func responseError(ctx context.Context, resp *http.Response, url string, contextual bool) error {
+	apiError, bodyErr := newAPIError(resp, url)
+	if !contextual {
+		return apiError
+	}
+	if bodyErr != nil {
+		return contextError(ctx, fmt.Errorf("%w: %w", apiError, bodyErr))
+	}
+	return contextError(ctx, apiError)
 }
 
 func contains(array []string, item string) bool {
@@ -167,10 +195,22 @@ func appendFilters(urlString string, filters map[string]interface{}) (string, er
 }
 
 func NewAPIClient(opts *ClientOpts) (APIBaseClient, error) {
-	var err error
+	return newAPIClient(context.Background(), opts, false)
+}
+
+// NewAPIClientContext discovers schemas using ctx without retaining it in the client.
+// The caller must exclusively own opts and its HTTPClient during construction.
+func NewAPIClientContext(ctx context.Context, opts *ClientOpts) (APIBaseClient, error) {
+	return newAPIClient(ctx, opts, true)
+}
+
+func newAPIClient(ctx context.Context, opts *ClientOpts, contextual bool) (APIBaseClient, error) {
 
 	result := APIBaseClient{
 		Types: map[string]types.Schema{},
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
 	}
 
 	client := opts.HTTPClient
@@ -202,7 +242,7 @@ func NewAPIClient(opts *ClientOpts) (APIBaseClient, error) {
 		roots := x509.NewCertPool()
 		ok := roots.AppendCertsFromPEM([]byte(opts.CACerts))
 		if !ok {
-			return result, err
+			return result, errors.New("failed to parse CA certificates: no valid PEM certificates")
 		}
 		tr := &http.Transport{
 			TLSClientConfig: &tls.Config{
@@ -236,33 +276,40 @@ func NewAPIClient(opts *ClientOpts) (APIBaseClient, error) {
 		client.Transport = tr
 	}
 
-	req, err := http.NewRequest("GET", opts.URL, nil)
+	published := false
+	defer func() {
+		if !published {
+			client.CloseIdleConnections()
+		}
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", opts.URL, nil)
 	if err != nil {
-		return result, err
+		return result, contextError(ctx, err)
 	}
 	req.Header.Add("Authorization", opts.getAuthHeader())
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return result, err
+		return result, contextError(ctx, err)
 	}
 	defer func(closer io.Closer) {
 		_ = closer.Close()
 	}(resp.Body)
 
 	if resp.StatusCode != 200 {
-		return result, NewAPIError(resp, opts.URL)
+		return result, responseError(ctx, resp, opts.URL, contextual)
 	}
 
 	schemasURLs := resp.Header.Get("X-API-Schemas")
 	if len(schemasURLs) == 0 {
-		return result, errors.New("Failed to find schema at [" + opts.URL + "]")
+		return result, contextError(ctx, errors.New("Failed to find schema at ["+opts.URL+"]"))
 	}
 
 	if schemasURLs != opts.URL {
-		req, err = http.NewRequest("GET", schemasURLs, nil)
+		req, err = http.NewRequestWithContext(ctx, "GET", schemasURLs, nil)
 		if err != nil {
-			return result, err
+			return result, contextError(ctx, err)
 		}
 		req.Header.Add("Authorization", opts.getAuthHeader())
 
@@ -272,21 +319,21 @@ func NewAPIClient(opts *ClientOpts) (APIBaseClient, error) {
 
 		resp, err = client.Do(req)
 		if err != nil {
-			return result, err
+			return result, contextError(ctx, err)
 		}
 		defer func(closer io.Closer) {
 			_ = closer.Close()
 		}(resp.Body)
 
 		if resp.StatusCode != 200 {
-			return result, NewAPIError(resp, schemasURLs)
+			return result, responseError(ctx, resp, schemasURLs, contextual)
 		}
 	}
 
 	var schemas types.SchemaCollection
 	bytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return result, err
+		return result, contextError(ctx, err)
 	}
 
 	if Debug {
@@ -295,6 +342,10 @@ func NewAPIClient(opts *ClientOpts) (APIBaseClient, error) {
 
 	err = json.Unmarshal(bytes, &schemas)
 	if err != nil {
+		return result, contextError(ctx, err)
+	}
+
+	if err := ctx.Err(); err != nil {
 		return result, err
 	}
 
@@ -319,6 +370,10 @@ func NewAPIClient(opts *ClientOpts) (APIBaseClient, error) {
 		result.Ops.Dialer.TLSClientConfig = ht.TLSClientConfig
 	}
 
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	published = true
 	return result, nil
 }
 

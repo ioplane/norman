@@ -1,0 +1,8 @@
+.git
+.worktrees
+artifacts
+bin
+dist
+.cache
+**/.cache
+**/*.log

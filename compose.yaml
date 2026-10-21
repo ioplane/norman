@@ -1,0 +1,25 @@
+name: norman
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Containerfile.dev
+      args:
+        SOURCE_REVISION: ${SOURCE_REVISION:?full source commit SHA required}
+        BUILD_CREATED: ${BUILD_CREATED:?RFC3339 build timestamp required}
+    image: localhost/norman:dev
+    working_dir: /src
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - .:/src:ro,z
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=512m,mode=1777
+      - /cache:rw,nosuid,nodev,size=4g,mode=1777
+    environment:
+      GOPROXY: https://proxy.golang.org
+      GOSUMDB: sum.golang.org
+    command: [bash]
+    profiles: [dev]
