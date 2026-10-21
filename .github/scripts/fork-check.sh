@@ -110,7 +110,7 @@ func check() error {
 			if event.Action == "run" { runs[event.Test]++; if !strings.Contains(event.Test, "/") { top++ } }
 			if event.Action == "pass" { passes[event.Test]++ }
 		}
-		if len(runs) != 45 || len(passes) != 45 || top != 10 || packages != 1 { return fmt.Errorf("test input mismatch: runs=%d passes=%d top=%d packages=%d", len(runs), len(passes), top, packages) }
+		if len(runs) != required.Total || len(passes) != required.Total || top != required.Top || packages != 1 { return fmt.Errorf("test input mismatch: runs=%d passes=%d top=%d packages=%d", len(runs), len(passes), top, packages) }
 		seen := map[string]bool{}
 		for _, name := range required.Required {
 			if seen[name] || runs[name] != 1 || passes[name] != 1 { return fmt.Errorf("missing/duplicate/unpassed required test %s", name) }
