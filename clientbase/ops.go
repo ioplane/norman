@@ -2,6 +2,7 @@ package clientbase
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -50,28 +51,40 @@ func (a *APIOperations) DoDelete(url string) error {
 }
 
 func (a *APIOperations) DoGet(url string, opts *types.ListOpts, respObject interface{}) error {
+	return a.doGet(context.Background(), url, opts, respObject, false)
+}
+
+// DoGetContext reads a resource using only this request's context.
+func (a *APIOperations) DoGetContext(ctx context.Context, url string, opts *types.ListOpts, out interface{}) error {
+	return a.doGet(ctx, url, opts, out, true)
+}
+
+func (a *APIOperations) doGet(ctx context.Context, url string, opts *types.ListOpts, respObject interface{}, contextual bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if opts == nil {
 		opts = NewListOpts()
 	}
 	url, err := appendFilters(url, opts.Filters)
 	if err != nil {
-		return err
+		return contextError(ctx, err)
 	}
 
 	if Debug {
 		fmt.Println("GET " + url)
 	}
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return err
+		return contextError(ctx, err)
 	}
 
 	a.SetupRequest(req)
 
 	resp, err := a.Client.Do(req)
 	if err != nil {
-		return err
+		return contextError(ctx, err)
 	}
 
 	defer func() {
@@ -79,12 +92,12 @@ func (a *APIOperations) DoGet(url string, opts *types.ListOpts, respObject inter
 	}()
 
 	if resp.StatusCode != 200 {
-		return NewAPIError(resp, url)
+		return responseError(ctx, resp, url, contextual)
 	}
 
 	byteContent, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return contextError(ctx, err)
 	}
 
 	if Debug {
@@ -92,10 +105,10 @@ func (a *APIOperations) DoGet(url string, opts *types.ListOpts, respObject inter
 	}
 
 	if err := json.Unmarshal(byteContent, respObject); err != nil {
-		return errors.Wrap(err, fmt.Sprintf("Failed to parse: %s", byteContent))
+		return contextError(ctx, errors.Wrap(err, fmt.Sprintf("Failed to parse: %s", byteContent)))
 	}
 
-	return nil
+	return ctx.Err()
 }
 
 func (a *APIOperations) DoList(schemaType string, opts *types.ListOpts, respObject interface{}) error {
@@ -251,6 +264,15 @@ func (a *APIOperations) doUpdate(schemaType string, replace bool, existing *type
 }
 
 func (a *APIOperations) DoByID(schemaType string, id string, respObject interface{}) error {
+	return a.doByID(context.Background(), schemaType, id, respObject, false)
+}
+
+// DoByIDContext preserves schema lookup rules and cancels the resulting GET with ctx.
+func (a *APIOperations) DoByIDContext(ctx context.Context, schemaType, id string, out interface{}) error {
+	return a.doByID(ctx, schemaType, id, out, true)
+}
+
+func (a *APIOperations) doByID(ctx context.Context, schemaType, id string, respObject interface{}, contextual bool) error {
 	schema, ok := a.Types[schemaType]
 	if !ok {
 		return errors.New("Unknown schema type [" + schemaType + "]")
@@ -265,7 +287,7 @@ func (a *APIOperations) DoByID(schemaType string, id string, respObject interfac
 		return errors.New("Failed to find collection URL for [" + schemaType + "]")
 	}
 
-	return a.DoGet(collectionURL+"/"+id, nil, respObject)
+	return a.doGet(ctx, collectionURL+"/"+id, nil, respObject, contextual)
 }
 
 func (a *APIOperations) DoResourceDelete(schemaType string, existing *types.Resource) error {
