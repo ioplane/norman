@@ -23,3 +23,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - Both constructors reject malformed nonempty CA bundles before network access, including insecure mode, instead of returning a partial client with a nil error.
+
+- `golang.org/x/net` v0.61.0 includes the HTTP/2 fixes for GO-2026-6603, GO-2026-6610, GO-2026-6611, GO-2026-6612 and GO-2026-6617. The previous exact-head scan reported static-call reachability; live exploitation was not established.
+- `golang.org/x/mod` v0.42.0 includes the checksum database verification fixes for GO-2026-6179 and GO-2026-6180, previously reported at module-presence level only; required module graph and checksum changes retain the Go 1.26.0 floor and Go 1.27.3 development compiler.

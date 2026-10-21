@@ -54,7 +54,9 @@ contexts do not change those fields. Malformed nonempty `CACerts` now fails
 before network access in both constructors, including when `Insecure` is true.
 
 Development uses the digest-pinned Go 1.27.3 `Containerfile.dev`; the module's
-Go 1.26.0 floor, dependency graph and checksums remain unchanged. Install only
+Go 1.26.0 floor remains unchanged. The dependency security update selects
+`golang.org/x/net` v0.61.0 and `golang.org/x/mod` v0.42.0 with their required
+module graph and checksum changes. Install only
 rootless Podman, Git and Make on the host. After the own-fork CI control change
 is present, run `SCAN_BASE=<reviewed-base-sha> make ci` for all checks, or
 `make build`, `make test`,
