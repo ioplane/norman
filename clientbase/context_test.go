@@ -110,12 +110,18 @@ func TestContextHTTPPhases(t *testing.T) {
 				started := make(chan struct{})
 				observed := make(chan struct{})
 				release := make(chan struct{})
+				handlerRelease := make(chan struct{})
 				var gets, mutations atomic.Int32
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.Method == "GET" {
 						gets.Add(1)
 					} else {
 						mutations.Add(1)
+						// Consume the request before waiting for HTTP/1 connection cancellation.
+						if _, err := io.Copy(io.Discard, r.Body); err != nil {
+							t.Errorf("mutation body: %v", err)
+							return
+						}
 					}
 					if r.Header.Get("Authorization") != "Bearer test-token" {
 						t.Error("authorization missing")
@@ -144,10 +150,14 @@ func TestContextHTTPPhases(t *testing.T) {
 					if phase != "error-body" {
 						close(started)
 					}
-					<-r.Context().Done()
-					close(observed)
+					select {
+					case <-r.Context().Done():
+						close(observed)
+					case <-handlerRelease:
+					}
 				}))
 				defer server.Close()
+				defer close(handlerRelease)
 				budget := 3 * time.Second
 				if phase == "body" {
 					budget = 250 * time.Millisecond
