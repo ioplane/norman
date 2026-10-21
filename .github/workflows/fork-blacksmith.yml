@@ -1,0 +1,36 @@
+name: Fork Blacksmith checks
+
+on:
+  pull_request:
+    branches: [fork/release-v0.9]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  norman:
+    name: Exact-head Norman checks
+    if: >-
+      github.repository == 'ioplane/norman' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the exact source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify source and run isolated checks
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          SCAN_BASE: ${{ github.event.pull_request.base.sha }}
+          CI_EVENT: ${{ github.event_name }}
+        run: bash .github/scripts/fork-check.sh ci

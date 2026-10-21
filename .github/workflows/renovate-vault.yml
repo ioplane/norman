@@ -22,6 +22,7 @@ permissions:
 
 jobs:
   call-workflow:
+    if: github.repository == 'rancher/norman'
     uses: rancher/renovate-config/.github/workflows/renovate-vault.yml@84bf074154364f80af052ebba8e23614212b79df # release
     with:
       logLevel: ${{ inputs.logLevel || 'info' }}
