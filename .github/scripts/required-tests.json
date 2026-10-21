@@ -16,9 +16,18 @@
     "TestContextHTTPPhases/constructor-second/body",
     "TestContextHTTPPhases/constructor-second/error-body",
     "TestContextHTTPPhases/constructor-second/headers",
+    "TestContextHTTPPhases/create/body",
+    "TestContextHTTPPhases/create/error-body",
+    "TestContextHTTPPhases/create/headers",
+    "TestContextHTTPPhases/delete/body",
+    "TestContextHTTPPhases/delete/error-body",
+    "TestContextHTTPPhases/delete/headers",
     "TestContextHTTPPhases/get/body",
     "TestContextHTTPPhases/get/error-body",
     "TestContextHTTPPhases/get/headers",
+    "TestContextHTTPPhases/update/body",
+    "TestContextHTTPPhases/update/error-body",
+    "TestContextHTTPPhases/update/headers",
     "TestContextMalformedCA",
     "TestContextMalformedCA/false",
     "TestContextMalformedCA/true",
@@ -38,6 +47,6 @@
     "TestLegacyMalformedCA/insecure",
     "TestLegacyMalformedCA/verified"
   ],
-  "total": 36,
+  "total": 45,
   "top_level": 10
 }
