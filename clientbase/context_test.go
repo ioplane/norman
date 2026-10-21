@@ -102,13 +102,17 @@ func TestContextPreCanceled(t *testing.T) {
 	var out map[string]interface{}
 	existing := new(types.Resource)
 	existing.Links = map[string]string{SELF: server.URL}
-	for _, err := range []error{ops.DoGetContext(ctx, server.URL, nil, &out), ops.DoByIDContext(ctx, "setting", "name", &out), ops.DoCreateContext(ctx, "setting", nil, &out), ops.DoUpdateContext(ctx, "setting", existing, nil, &out), ops.DoResourceDeleteContext(ctx, "setting", existing)} {
+	existing.Actions = map[string]string{"activate": server.URL}
+	for _, err := range []error{ops.DoGetContext(ctx, server.URL, nil, &out), ops.DoByIDContext(ctx, "setting", "name", &out), ops.DoCreateContext(ctx, "setting", nil, &out), ops.DoUpdateContext(ctx, "setting", existing, nil, &out), ops.DoResourceDeleteContext(ctx, "setting", existing), ops.DoActionContext(ctx, "setting", "activate", existing, nil, &out)} {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("operation: %v", err)
 		}
 	}
 	if err := ops.DoResourceDeleteContext(context.Background(), "setting", nil); err == nil {
 		t.Fatal("nil resource accepted for deletion")
+	}
+	if err := ops.DoActionContext(context.Background(), "setting", "activate", nil, nil, nil); err == nil {
+		t.Fatal("nil resource accepted for action")
 	}
 	if gets.Load() != 0 || mutations.Load() != 0 {
 		t.Fatalf("GET=%d mutations=%d", gets.Load(), mutations.Load())
@@ -117,7 +121,7 @@ func TestContextPreCanceled(t *testing.T) {
 }
 
 func TestContextHTTPPhases(t *testing.T) {
-	for _, operation := range []string{"constructor-first", "constructor-second", "get", "byid", "create", "update", "delete"} {
+	for _, operation := range []string{"constructor-first", "constructor-second", "get", "byid", "create", "update", "delete", "action"} {
 		for _, phase := range []string{"headers", "body", "error-body"} {
 			t.Run(operation+"/"+phase, func(t *testing.T) {
 				started := make(chan struct{})
@@ -200,6 +204,7 @@ func TestContextHTTPPhases(t *testing.T) {
 					var out map[string]interface{}
 					existing := new(types.Resource)
 					existing.Links = map[string]string{SELF: server.URL + "/settings/name"}
+					existing.Actions = map[string]string{"activate": server.URL + "/settings/name"}
 					switch operation {
 					case "constructor-first":
 						opts.URL = server.URL + "/blocked"
@@ -218,6 +223,8 @@ func TestContextHTTPPhases(t *testing.T) {
 						done <- client.Ops.DoUpdateContext(ctx, "setting", existing, map[string]string{"value": "new"}, &out)
 					case "delete":
 						done <- client.Ops.DoResourceDeleteContext(ctx, "setting", existing)
+					case "action":
+						done <- client.Ops.DoActionContext(ctx, "setting", "activate", existing, map[string]string{"value": "new"}, &out)
 					}
 				}()
 				select {
@@ -265,7 +272,7 @@ func TestContextHTTPPhases(t *testing.T) {
 					wantGET = 2
 				}
 				wantMutations := int32(0)
-				if operation == "create" || operation == "update" || operation == "delete" {
+				if operation == "create" || operation == "update" || operation == "delete" || operation == "action" {
 					wantGET, wantMutations = 1, 1
 				}
 				if gets.Load() != wantGET || mutations.Load() != wantMutations {
@@ -517,8 +524,8 @@ func TestContextTLSAuthAndSchemaControls(t *testing.T) {
 			})
 		}
 	}
-	if mutations.Load() != 12 {
-		t.Fatalf("mutations=%d; want 12 legacy/contextual wire controls", mutations.Load())
+	if mutations.Load() != 16 {
+		t.Fatalf("mutations=%d; want 16 legacy/contextual wire controls", mutations.Load())
 	}
 	t.Logf("GET=%d mutations=%d", gets.Load(), mutations.Load())
 }
@@ -548,6 +555,16 @@ func checkContextMutationWire(
 
 	if err != nil || out["value"] != "ok" {
 		t.Fatalf("Update=%v %v", out, err)
+	}
+
+	existing.Actions = map[string]string{"activate": existing.Links[SELF]}
+	if contextual {
+		err = ops.DoActionContext(context.Background(), "setting", "activate", existing, updates, &out)
+	} else {
+		err = ops.DoAction("setting", "activate", existing, updates, &out)
+	}
+	if err != nil || out["value"] != "ok" {
+		t.Fatalf("Action=%v %v", out, err)
 	}
 
 	if contextual {

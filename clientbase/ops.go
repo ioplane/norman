@@ -128,7 +128,21 @@ func (a *APIOperations) DoAction(schemaType string, action string,
 		return fmt.Errorf("action [%v] not available on [%v]", action, existing)
 	}
 
-	return a.doAction(schemaType, action, actionURL, inputObject, respObject)
+	return a.doAction(context.Background(), schemaType, action, actionURL, inputObject, respObject, false)
+}
+
+// DoActionContext executes a resource action with the caller's context.
+func (a *APIOperations) DoActionContext(
+	ctx context.Context, schemaType, action string, existing *types.Resource, inputObject, respObject any,
+) error {
+	if existing == nil {
+		return fmt.Errorf("action %s: %w", action, nilResourceError{})
+	}
+	actionURL, ok := existing.Actions[action]
+	if !ok {
+		return fmt.Errorf("action %q is not available on resource %q", action, existing.ID)
+	}
+	return a.doAction(ctx, schemaType, action, actionURL, inputObject, respObject, true)
 }
 
 func (a *APIOperations) DoCollectionAction(schemaType string, action string,
@@ -143,7 +157,7 @@ func (a *APIOperations) DoCollectionAction(schemaType string, action string,
 		return fmt.Errorf("action [%v] not available on [%v]", action, existing)
 	}
 
-	return a.doAction(schemaType, action, actionURL, inputObject, respObject)
+	return a.doAction(context.Background(), schemaType, action, actionURL, inputObject, respObject, false)
 }
 
 func (a *APIOperations) doDelete(ctx context.Context, url string, contextual bool) error {
@@ -396,11 +410,13 @@ func (a *APIOperations) doResourceDelete(
 }
 
 func (a *APIOperations) doAction(
+	ctx context.Context,
 	schemaType string,
 	action string,
 	actionURL string,
 	inputObject interface{},
 	respObject interface{},
+	contextual bool,
 ) error {
 	_, ok := a.Types[schemaType]
 	if !ok {
@@ -424,9 +440,9 @@ func (a *APIOperations) doAction(
 		input = bytes.NewBuffer(bodyContent)
 	}
 
-	req, err := http.NewRequest("POST", actionURL, input)
+	req, err := http.NewRequestWithContext(ctx, "POST", actionURL, input)
 	if err != nil {
-		return err
+		return contextError(ctx, err)
 	}
 
 	a.SetupRequest(req)
@@ -435,7 +451,7 @@ func (a *APIOperations) doAction(
 
 	resp, err := a.Client.Do(req)
 	if err != nil {
-		return err
+		return contextError(ctx, err)
 	}
 
 	defer func() {
@@ -443,12 +459,12 @@ func (a *APIOperations) doAction(
 	}()
 
 	if resp.StatusCode >= 300 {
-		return NewAPIError(resp, actionURL)
+		return responseError(ctx, resp, actionURL, contextual)
 	}
 
 	byteContent, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return contextError(ctx, err)
 	}
 
 	if Debug {
@@ -456,7 +472,7 @@ func (a *APIOperations) doAction(
 	}
 
 	if nil != respObject {
-		return json.Unmarshal(byteContent, respObject)
+		return contextError(ctx, json.Unmarshal(byteContent, respObject))
 	}
-	return nil
+	return contextError(ctx, nil)
 }
