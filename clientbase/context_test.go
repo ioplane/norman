@@ -50,7 +50,7 @@ func contextSchema(w http.ResponseWriter, r *http.Request) {
 		schemaURL += r.URL.Path
 	}
 	w.Header().Set("X-API-Schemas", schemaURL)
-	fmt.Fprintf(w, `{"data":[{"id":"setting","resourceMethods":["GET"],"links":{"collection":"http://%s/settings"}}]}`, r.Host)
+	fmt.Fprintf(w, `{"data":[{"id":"setting","resourceMethods":["GET","PUT","DELETE"],"collectionMethods":["POST"],"links":{"collection":"http://%s/settings"}}]}`, r.Host)
 }
 
 func TestContextMalformedCA(t *testing.T) {
@@ -85,13 +85,17 @@ func TestContextPreCanceled(t *testing.T) {
 		t.Fatalf("constructor: %v", err)
 	}
 	ops := &APIOperations{Opts: &ClientOpts{}, Client: server.Client(), Types: map[string]types.Schema{
-		"setting": {ResourceMethods: []string{"GET"}, Links: map[string]string{COLLECTION: server.URL}},
+		"setting": {ResourceMethods: []string{"GET", "PUT", "DELETE"}, CollectionMethods: []string{"POST"}, Links: map[string]string{COLLECTION: server.URL}},
 	}}
 	var out map[string]interface{}
-	for _, err := range []error{ops.DoGetContext(ctx, server.URL, nil, &out), ops.DoByIDContext(ctx, "setting", "name", &out)} {
+	existing := &types.Resource{Links: map[string]string{SELF: server.URL}}
+	for _, err := range []error{ops.DoGetContext(ctx, server.URL, nil, &out), ops.DoByIDContext(ctx, "setting", "name", &out), ops.DoCreateContext(ctx, "setting", nil, &out), ops.DoUpdateContext(ctx, "setting", existing, nil, &out), ops.DoResourceDeleteContext(ctx, "setting", existing)} {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("operation: %v", err)
 		}
+	}
+	if err := ops.DoResourceDeleteContext(context.Background(), "setting", nil); err == nil {
+		t.Fatal("nil resource accepted for deletion")
 	}
 	if gets.Load() != 0 || mutations.Load() != 0 {
 		t.Fatalf("GET=%d mutations=%d", gets.Load(), mutations.Load())
@@ -100,7 +104,7 @@ func TestContextPreCanceled(t *testing.T) {
 }
 
 func TestContextHTTPPhases(t *testing.T) {
-	for _, operation := range []string{"constructor-first", "constructor-second", "get", "byid"} {
+	for _, operation := range []string{"constructor-first", "constructor-second", "get", "byid", "create", "update", "delete"} {
 		for _, phase := range []string{"headers", "body", "error-body"} {
 			t.Run(operation+"/"+phase, func(t *testing.T) {
 				started := make(chan struct{})
@@ -118,7 +122,7 @@ func TestContextHTTPPhases(t *testing.T) {
 						w.WriteHeader(401)
 						return
 					}
-					blocked := r.URL.Path == "/blocked" || r.URL.Path == "/settings/name"
+					blocked := r.URL.Path == "/blocked" || r.URL.Path == "/settings/name" || (operation == "create" && r.URL.Path == "/settings")
 					if !blocked {
 						if operation == "constructor-second" {
 							w.Header().Set("X-API-Schemas", "http://"+r.Host+"/blocked")
@@ -161,7 +165,7 @@ func TestContextHTTPPhases(t *testing.T) {
 				}
 				var client APIBaseClient
 				var err error
-				if operation == "get" || operation == "byid" {
+				if operation != "constructor-first" && operation != "constructor-second" {
 					client, err = NewAPIClientContext(context.Background(), opts)
 					if err != nil {
 						t.Fatal(err)
@@ -171,6 +175,7 @@ func TestContextHTTPPhases(t *testing.T) {
 				done := make(chan error, 1)
 				go func() {
 					var out map[string]interface{}
+					existing := &types.Resource{Links: map[string]string{SELF: server.URL + "/settings/name"}}
 					switch operation {
 					case "constructor-first":
 						opts.URL = server.URL + "/blocked"
@@ -183,6 +188,12 @@ func TestContextHTTPPhases(t *testing.T) {
 						done <- client.Ops.DoGetContext(ctx, server.URL+"/blocked", nil, &out)
 					case "byid":
 						done <- client.Ops.DoByIDContext(ctx, "setting", "name", &out)
+					case "create":
+						done <- client.Ops.DoCreateContext(ctx, "setting", map[string]string{"value": "new"}, &out)
+					case "update":
+						done <- client.Ops.DoUpdateContext(ctx, "setting", existing, map[string]string{"value": "new"}, &out)
+					case "delete":
+						done <- client.Ops.DoResourceDeleteContext(ctx, "setting", existing)
 					}
 				}()
 				select {
@@ -229,8 +240,12 @@ func TestContextHTTPPhases(t *testing.T) {
 				if operation != "constructor-first" {
 					wantGET = 2
 				}
-				if gets.Load() != wantGET || mutations.Load() != 0 {
-					t.Fatalf("GET=%d want=%d mutations=%d", gets.Load(), wantGET, mutations.Load())
+				wantMutations := int32(0)
+				if operation == "create" || operation == "update" || operation == "delete" {
+					wantGET, wantMutations = 1, 1
+				}
+				if gets.Load() != wantGET || mutations.Load() != wantMutations {
+					t.Fatalf("GET=%d want=%d mutations=%d want=%d", gets.Load(), wantGET, mutations.Load(), wantMutations)
 				}
 				t.Logf("GET=%d mutations=%d handler-canceled=true", gets.Load(), mutations.Load())
 			})
@@ -387,16 +402,35 @@ func TestContextTLSAuthAndSchemaControls(t *testing.T) {
 			w.WriteHeader(401)
 			return
 		}
+		if r.Method == http.MethodPost || r.Method == http.MethodPut {
+			var payload map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload["value"] != "new" || r.Header.Get("Content-Type") != "application/json" {
+				t.Errorf("mutation payload/headers changed: %v %v", payload, err)
+			}
+		}
+		if (r.Method == http.MethodPut || r.Method == http.MethodDelete) && r.URL.Query().Get("source") != "kept" {
+			t.Error("self URL query changed")
+		}
 		switch r.URL.Path {
 		case "/":
 			w.Header().Set("X-API-Schemas", "https://"+r.Host+"/schemas")
 			fmt.Fprint(w, `{}`)
 		case "/schemas":
-			fmt.Fprintf(w, `{"data":[{"id":"setting","resourceMethods":["GET"],"links":{"collection":"https://%s/settings"}}]}`, r.Host)
+			fmt.Fprintf(w, `{"data":[{"id":"setting","resourceMethods":["GET","PUT","DELETE"],"collectionMethods":["POST"],"links":{"collection":"https://%s/settings"}}]}`, r.Host)
 		case "/redirect":
 			http.Redirect(w, r, "/settings/name", 302)
 		case "/settings/name":
+			if r.Method == http.MethodDelete {
+				if r.ContentLength != 0 {
+					t.Error("DELETE request gained a body")
+				}
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
 			fmt.Fprint(w, `{"value":"ok"}`)
+		case "/settings":
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"value":"created"}`)
 		case "/filter":
 			if r.URL.Query().Get("name") != "a b" {
 				t.Error("filter missing")
@@ -434,12 +468,43 @@ func TestContextTLSAuthAndSchemaControls(t *testing.T) {
 				if err := client.Ops.DoGetContext(context.Background(), server.URL+"/filter", &types.ListOpts{Filters: map[string]interface{}{"name": "a b"}}, &out); err != nil {
 					t.Fatal(err)
 				}
+				updates := map[string]string{"value": "new"}
+				existing := &types.Resource{Links: map[string]string{SELF: server.URL + "/settings/name?source=kept"}}
+				if contextual {
+					err = client.Ops.DoCreateContext(context.Background(), "setting", updates, &out)
+				} else {
+					err = client.Ops.DoCreate("setting", updates, &out)
+				}
+				if err != nil || out["value"] != "created" {
+					t.Fatalf("Create=%v %v", out, err)
+				}
+				if contextual {
+					err = client.Ops.DoUpdateContext(context.Background(), "setting", existing, updates, &out)
+				} else {
+					err = client.Ops.DoUpdate("setting", existing, updates, &out)
+				}
+				if err != nil || out["value"] != "ok" {
+					t.Fatalf("Update=%v %v", out, err)
+				}
+				if contextual {
+					err = client.Ops.DoResourceDeleteContext(context.Background(), "setting", existing)
+				} else {
+					err = client.Ops.DoResourceDelete("setting", existing)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
 				before := gets.Load()
 				for _, schema := range []string{"unknown", "not-readable", "no-link"} {
 					client.Types["not-readable"] = types.Schema{}
 					client.Types["no-link"] = types.Schema{ResourceMethods: []string{"GET"}}
 					if err := client.Ops.DoByIDContext(context.Background(), schema, "name", &out); err == nil {
 						t.Fatalf("accepted schema %s", schema)
+					}
+					for _, err := range []error{client.Ops.DoCreateContext(context.Background(), schema, updates, &out), client.Ops.DoUpdateContext(context.Background(), schema, existing, updates, &out), client.Ops.DoResourceDeleteContext(context.Background(), schema, existing)} {
+						if err == nil {
+							t.Fatalf("mutation accepted schema %s", schema)
+						}
 					}
 				}
 				if before != gets.Load() {
@@ -448,8 +513,8 @@ func TestContextTLSAuthAndSchemaControls(t *testing.T) {
 			})
 		}
 	}
-	if mutations.Load() != 0 {
-		t.Fatalf("mutations=%d", mutations.Load())
+	if mutations.Load() != 12 {
+		t.Fatalf("mutations=%d; want 12 legacy/contextual wire controls", mutations.Load())
 	}
 	t.Logf("GET=%d mutations=%d", gets.Load(), mutations.Load())
 }

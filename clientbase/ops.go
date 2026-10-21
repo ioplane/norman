@@ -27,24 +27,34 @@ func (a *APIOperations) SetupRequest(req *http.Request) {
 }
 
 func (a *APIOperations) DoDelete(url string) error {
-	req, err := http.NewRequest("DELETE", url, nil)
+	return a.doDelete(context.Background(), url, false)
+}
+
+func (a *APIOperations) doDelete(ctx context.Context, url string, contextual bool) error {
+	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 	if err != nil {
-		return err
+		return contextError(ctx, err)
 	}
 
 	a.SetupRequest(req)
 
 	resp, err := a.Client.Do(req)
 	if err != nil {
-		return err
+		return contextError(ctx, err)
 	}
 	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
+		if !contextual {
+			_, _ = io.Copy(io.Discard, resp.Body)
+		}
 		_ = resp.Body.Close()
 	}()
 
 	if resp.StatusCode >= 300 {
-		return NewAPIError(resp, url)
+		return responseError(ctx, resp, url, contextual)
+	}
+	if contextual {
+		_, err := io.Copy(io.Discard, resp.Body)
+		return contextError(ctx, err)
 	}
 
 	return nil
@@ -134,6 +144,10 @@ func (a *APIOperations) DoNext(nextURL string, respObject interface{}) error {
 }
 
 func (a *APIOperations) DoModify(method string, url string, createObj interface{}, respObject interface{}) error {
+	return a.doModify(context.Background(), method, url, createObj, respObject, false)
+}
+
+func (a *APIOperations) doModify(ctx context.Context, method string, url string, createObj interface{}, respObject interface{}, contextual bool) error {
 	if createObj == nil {
 		createObj = map[string]string{}
 	}
@@ -142,7 +156,7 @@ func (a *APIOperations) DoModify(method string, url string, createObj interface{
 	}
 	bodyContent, err := json.Marshal(createObj)
 	if err != nil {
-		return err
+		return contextError(ctx, err)
 	}
 
 	if Debug {
@@ -150,9 +164,9 @@ func (a *APIOperations) DoModify(method string, url string, createObj interface{
 		fmt.Println("Request => " + string(bodyContent))
 	}
 
-	req, err := http.NewRequest(method, url, bytes.NewBuffer(bodyContent))
+	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(bodyContent))
 	if err != nil {
-		return err
+		return contextError(ctx, err)
 	}
 
 	a.SetupRequest(req)
@@ -160,7 +174,7 @@ func (a *APIOperations) DoModify(method string, url string, createObj interface{
 
 	resp, err := a.Client.Do(req)
 	if err != nil {
-		return err
+		return contextError(ctx, err)
 	}
 
 	defer func() {
@@ -168,25 +182,34 @@ func (a *APIOperations) DoModify(method string, url string, createObj interface{
 	}()
 
 	if resp.StatusCode >= 300 {
-		return NewAPIError(resp, url)
+		return responseError(ctx, resp, url, contextual)
 	}
 
 	byteContent, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return contextError(ctx, err)
 	}
 
 	if len(byteContent) > 0 {
 		if Debug {
 			fmt.Println("Response <= " + string(byteContent))
 		}
-		return json.Unmarshal(byteContent, respObject)
+		return contextError(ctx, json.Unmarshal(byteContent, respObject))
 	}
 
-	return nil
+	return ctx.Err()
 }
 
 func (a *APIOperations) DoCreate(schemaType string, createObj interface{}, respObject interface{}) error {
+	return a.doCreate(context.Background(), schemaType, createObj, respObject, false)
+}
+
+// DoCreateContext creates a resource without retrying a canceled write.
+func (a *APIOperations) DoCreateContext(ctx context.Context, schemaType string, createObj, respObject any) error {
+	return a.doCreate(ctx, schemaType, createObj, respObject, true)
+}
+
+func (a *APIOperations) doCreate(ctx context.Context, schemaType string, createObj interface{}, respObject interface{}, contextual bool) error {
 	if createObj == nil {
 		createObj = map[string]string{}
 	}
@@ -211,18 +234,23 @@ func (a *APIOperations) DoCreate(schemaType string, createObj interface{}, respO
 		collectionURL = re.ReplaceAllString(schema.Links[SELF], schema.PluralName)
 	}
 
-	return a.DoModify("POST", collectionURL, createObj, respObject)
+	return a.doModify(ctx, "POST", collectionURL, createObj, respObject, contextual)
 }
 
 func (a *APIOperations) DoReplace(schemaType string, existing *types.Resource, updates interface{}, respObject interface{}) error {
-	return a.doUpdate(schemaType, true, existing, updates, respObject)
+	return a.doUpdate(context.Background(), schemaType, true, existing, updates, respObject, false)
 }
 
 func (a *APIOperations) DoUpdate(schemaType string, existing *types.Resource, updates interface{}, respObject interface{}) error {
-	return a.doUpdate(schemaType, false, existing, updates, respObject)
+	return a.doUpdate(context.Background(), schemaType, false, existing, updates, respObject, false)
 }
 
-func (a *APIOperations) doUpdate(schemaType string, replace bool, existing *types.Resource, updates interface{}, respObject interface{}) error {
+// DoUpdateContext updates a resource using only this operation's context.
+func (a *APIOperations) DoUpdateContext(ctx context.Context, schemaType string, existing *types.Resource, updates, respObject any) error {
+	return a.doUpdate(ctx, schemaType, false, existing, updates, respObject, true)
+}
+
+func (a *APIOperations) doUpdate(ctx context.Context, schemaType string, replace bool, existing *types.Resource, updates interface{}, respObject interface{}, contextual bool) error {
 	if existing == nil {
 		return errors.New("Existing object is nil")
 	}
@@ -260,7 +288,7 @@ func (a *APIOperations) doUpdate(schemaType string, replace bool, existing *type
 		return errors.New("Resource type [" + schemaType + "] is not updatable")
 	}
 
-	return a.DoModify("PUT", selfURL, updates, respObject)
+	return a.doModify(ctx, "PUT", selfURL, updates, respObject, contextual)
 }
 
 func (a *APIOperations) DoByID(schemaType string, id string, respObject interface{}) error {
@@ -291,6 +319,18 @@ func (a *APIOperations) doByID(ctx context.Context, schemaType, id string, respO
 }
 
 func (a *APIOperations) DoResourceDelete(schemaType string, existing *types.Resource) error {
+	return a.doResourceDelete(context.Background(), schemaType, existing, false)
+}
+
+// DoResourceDeleteContext deletes a resource without retrying an uncertain outcome.
+func (a *APIOperations) DoResourceDeleteContext(ctx context.Context, schemaType string, existing *types.Resource) error {
+	if existing == nil {
+		return fmt.Errorf("delete %s: existing object is nil", schemaType)
+	}
+	return a.doResourceDelete(ctx, schemaType, existing, true)
+}
+
+func (a *APIOperations) doResourceDelete(ctx context.Context, schemaType string, existing *types.Resource, contextual bool) error {
 	schema, ok := a.Types[schemaType]
 	if !ok {
 		return errors.New("Unknown schema type [" + schemaType + "]")
@@ -305,7 +345,7 @@ func (a *APIOperations) DoResourceDelete(schemaType string, existing *types.Reso
 		return fmt.Errorf("failed to find self URL of [%v]", existing)
 	}
 
-	return a.DoDelete(selfURL)
+	return a.doDelete(ctx, selfURL, contextual)
 }
 
 func (a *APIOperations) DoAction(schemaType string, action string,

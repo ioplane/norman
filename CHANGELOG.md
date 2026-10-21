@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Context-aware Create, Update and ResourceDelete operations preserve schema and wire checks without retaining the caller context or retrying writes after cancellation; the existing client interface and legacy entrypoints remain available.
 - Context-aware schema construction and GET/ByID operations without retaining request contexts in reusable clients; legacy signatures and generated interfaces remain available.
 - Pinned Go 1.27.3 development container and focused real HTTP cancellation, error-identity, authentication, and reuse controls; the Go 1.26.0 module floor and dependencies are retained.
 
